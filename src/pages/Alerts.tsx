@@ -38,13 +38,18 @@ export default function Alerts() {
 
   const isChiefScientist = currentUser.role === 'chief_scientist';
 
-  const isPausedStatus = (alert: DeviationAlert) => alert.isPaused && alert.deviationPercentage > 20;
-
   const calculateIndividualDeviations = (heights: number[]) => {
-    if (heights.length < 2) return { individual: [] as number[], avg: 0 };
+    if (heights.length < 2) return { individual: [] as number[], avg: 0, allExceed20: false };
     const avg = heights.reduce((a, b) => a + b, 0) / heights.length;
     const individual = heights.map((h) => (avg === 0 ? 0 : Number(Number(((h - avg) / avg) * 100).toFixed(1))));
-    return { individual, avg };
+    const allExceed20 = heights.length >= 3 && individual.every((d) => Math.abs(d) > 20);
+    return { individual, avg, allExceed20 };
+  };
+
+  const isPausedStatus = (alert: DeviationAlert) => {
+    if (!alert.isPaused) return false;
+    const { allExceed20 } = calculateIndividualDeviations(alert.plumeHeights);
+    return allExceed20;
   };
 
   const handleResume = async (alert: DeviationAlert) => {

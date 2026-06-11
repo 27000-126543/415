@@ -520,7 +520,7 @@ export const useAppStore = create<AppState>((set, get) => {
     currentUser: mockData.users.find((u) => u.role === 'volcanologist') || defaultUser,
     tasks: mockData.tasks,
     alerts: mockData.alerts,
-    approvals: mockData.approvals,
+    approvals: initApprovals,
     reports: initReports,
     dashboardStats: {
       totalTasks: mockData.tasks.length,
@@ -575,7 +575,19 @@ export const useAppStore = create<AppState>((set, get) => {
       try {
         const response = await approvalsApi.getApprovals()
         if (response.success && response.data) {
-          set({ approvals: response.data })
+          const curApprovals = get().approvals
+          const localDecidedIds = new Set(
+            curApprovals.filter((a) => a.status !== 'pending').map((a) => a.id)
+          )
+          const merged = response.data.map((apiApproval) => {
+            if (localDecidedIds.has(apiApproval.id)) {
+              return curApprovals.find((a) => a.id === apiApproval.id) || apiApproval
+            }
+            return apiApproval
+          })
+          const localNewIds = new Set(response.data.map((a) => a.id))
+          const localOnly = curApprovals.filter((a) => !localNewIds.has(a.id) && a.status !== 'pending')
+          set({ approvals: [...merged, ...localOnly] })
         }
       } catch (_) {}
       finally {
@@ -679,7 +691,7 @@ export const useAppStore = create<AppState>((set, get) => {
 
     calculateTaskDeviation: (taskId: string) => {
       const task = get().tasks.find((t) => t.id === taskId)
-      if (!task) return { overall: 0, individual: [], exceedsThreshold: false }
+      if (!task) return { overall: 0, individual: [], exceedsThreshold: false, allExceed20: false }
       const heights = get().activeVolcanoHeights[task.volcanoName] || []
       return calculateDeviation(heights)
     },
@@ -961,6 +973,7 @@ export const useAppStore = create<AppState>((set, get) => {
           }
         }
 
+        saveApprovals(finalApprovals, mockData.approvals)
         set({ approvals: finalApprovals, pushRecords: finalPushRecords })
 
         try {
