@@ -110,6 +110,20 @@ export default function ReportDetail() {
   const report = useMemo(() => reports.find((r) => r.id === id), [reports, id]);
   const task = useMemo(() => (report ? tasks.find((t) => t.id === report.taskId) : undefined), [tasks, report]);
 
+  const isTaskCompleted = useMemo(() => {
+    if (!task) return false;
+    return task.status === 'completed';
+  }, [task]);
+
+  const hasValidLayers = useMemo(() => {
+    if (!report) return false;
+    return (
+      report.ashDistribution && report.ashDistribution.length > 0 &&
+      report.thermalRadiationMap && report.thermalRadiationMap.length > 0 &&
+      report.settlementThickness && report.settlementThickness.length > 0
+    );
+  }, [report]);
+
   useEffect(() => {
     fetchReports();
     fetchTasks();
@@ -232,6 +246,12 @@ export default function ReportDetail() {
           <div>
             <div className="flex items-center gap-3 flex-wrap">
               <h2 className="font-display text-xl font-bold text-deep-space-50">{report.title}</h2>
+              {!isTaskCompleted && (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border bg-warning-500/20 text-warning-400 border-warning-500/30">
+                  <AlertCircle className="w-3 h-3" />
+                  未完成报告
+                </span>
+              )}
               <span
                 className={cn(
                   'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border',
@@ -244,6 +264,7 @@ export default function ReportDetail() {
             </div>
             <p className="text-sm text-deep-space-400 mt-1">
               {task?.volcanoName || '未知火山'} · 生成于 {formatDate(report.generatedAt)}
+              {!isTaskCompleted && task && ` · 任务状态：${task.status === 'error_fallback' ? '异常回退' : '计算中'}`}
             </p>
           </div>
         </div>
@@ -377,27 +398,47 @@ export default function ReportDetail() {
             </div>
           </div>
 
+          {!isTaskCompleted && (
+            <div className="p-4 rounded-lg bg-warning-500/10 border border-warning-500/30">
+              <div className="flex gap-3">
+                <AlertCircle className="w-5 h-5 text-warning-400 flex-shrink-0 mt-0.5" />
+                <div className="text-sm">
+                  <p className="font-medium text-warning-400 mb-1">报告未完成</p>
+                  <p className="text-deep-space-300">
+                    当前任务尚未完成全部计算，下方部分数据可能不完整。请等待任务完成后查看完整报告。
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {report.ashDistribution.length > 0 && (
-              <ContourMap
-                data={report.ashDistribution}
-                title="火山灰浓度等值面 (μg/m³)"
-                colors={ashColors}
-              />
-            )}
-            {report.thermalRadiationMap.length > 0 && (
-              <ContourMap
-                data={report.thermalRadiationMap}
-                title="热辐射云图 (W/m²)"
-                colors={thermalColors}
-              />
-            )}
-            {report.settlementThickness.length > 0 && (
-              <ContourMap
-                data={report.settlementThickness}
-                title="沉降厚度分布 (cm)"
-                colors={settlementColors}
-              />
+            {hasValidLayers ? (
+              <>
+                <ContourMap
+                  data={report.ashDistribution}
+                  title="火山灰浓度等值面 (μg/m³)"
+                  colors={ashColors}
+                />
+                <ContourMap
+                  data={report.thermalRadiationMap}
+                  title="热辐射云图 (W/m²)"
+                  colors={thermalColors}
+                />
+                <ContourMap
+                  data={report.settlementThickness}
+                  title="沉降厚度分布 (cm)"
+                  colors={settlementColors}
+                />
+              </>
+            ) : (
+              <div className="md:col-span-2 glass-card p-8 text-center">
+                <Layers className="w-12 h-12 text-deep-space-500 mx-auto mb-3 opacity-50" />
+                <p className="text-deep-space-400 mb-2">图层数据加载中</p>
+                <p className="text-xs text-deep-space-500">
+                  {isTaskCompleted ? '正在补全报告图层数据，请稍候...' : '任务完成后将自动生成图层数据'}
+                </p>
+              </div>
             )}
             <div>
               <h4 className="text-sm font-medium text-deep-space-200 mb-3 flex items-center gap-2">

@@ -427,8 +427,8 @@ export default function TaskDetail() {
                             <span className="font-data text-lava-400">
                               {log.afterParams.ventDiameter} m
                               {log.beforeParams.ventDiameter !== log.afterParams.ventDiameter && (
-                                <span className="ml-1 text-[10px text-danger-400">
-                                  ({((log.afterParams.ventDiameter - log.beforeParams.ventDiameter) / log.beforeParams.ventDiameter * 100).toFixed(0)}%
+                                <span className="ml-1 text-[10px] text-danger-400">
+                                  ({((log.afterParams.ventDiameter - log.beforeParams.ventDiameter) / log.beforeParams.ventDiameter * 100).toFixed(0)}%)
                                 </span>
                               )}
                             </span>

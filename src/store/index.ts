@@ -56,7 +56,10 @@ const STATUS_PROGRESS: Record<TaskStatus, number> = {
   error_fallback: 0,
 }
 
-const STAGE_DURATION_MS = 2200
+const STAGE_DURATION_MS = 2000
+const STORAGE_KEY_PUSH = 'volcano_push_records'
+const STORAGE_KEY_REPORTS = 'volcano_report_layers'
+const STORAGE_KEY_APPROVALS = 'volcano_approvals'
 
 function generateId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`
@@ -107,13 +110,20 @@ function generateSpatialGrid(count: number, baseValue: number, variance: number,
   return points
 }
 
-function generateMockPushRecords(): PushRecord[] {
-  const records: PushRecord[] = []
+function loadPushRecords(): PushRecord[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_PUSH)
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed)) return parsed
+    }
+  } catch (_) {}
+  const initRecords: PushRecord[] = []
   const completedApprovals = mockData.approvals.filter(
     (a) => a.stage === 'mitigation_confirmation' && a.status === 'approved'
   )
   completedApprovals.forEach((a) => {
-    records.push({
+    initRecords.push({
       id: generateId('push'),
       approvalId: a.id,
       taskId: a.taskId,
@@ -122,7 +132,7 @@ function generateMockPushRecords(): PushRecord[] {
       pushedAt: new Date(Date.now() - 1000 * 60 * 15).toISOString(),
       status: 'delivered',
     })
-    records.push({
+    initRecords.push({
       id: generateId('push'),
       approvalId: a.id,
       taskId: a.taskId,
@@ -132,15 +142,117 @@ function generateMockPushRecords(): PushRecord[] {
       status: 'acknowledged',
     })
   })
-  return records
+  localStorage.setItem(STORAGE_KEY_PUSH, JSON.stringify(initRecords))
+  return initRecords
 }
 
-function calculateDeviation(heights: number[]): number {
-  if (heights.length < 2) return 0
+function savePushRecords(records: PushRecord[]) {
+  try {
+    localStorage.setItem(STORAGE_KEY_PUSH, JSON.stringify(records))
+  } catch (_) {}
+}
+
+function loadApprovals(mockApprovals: Approval[]): Approval[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_APPROVALS)
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        const mockIds = new Set(mockApprovals.map((a) => a.id))
+        const savedApprovals = parsed.filter((a: Approval) => !mockIds.has(a.id))
+        return [...mockApprovals, ...savedApprovals]
+      }
+    }
+  } catch (_) {}
+  return mockApprovals
+}
+
+function saveApprovals(approvals: Approval[], mockApprovals: Approval[]) {
+  try {
+    const mockIds = new Set(mockApprovals.map((a) => a.id))
+    const customApprovals = approvals.filter((a) => !mockIds.has(a.id))
+    if (customApprovals.length > 0) {
+      localStorage.setItem(STORAGE_KEY_APPROVALS, JSON.stringify(customApprovals))
+    }
+  } catch (_) {}
+}
+
+function calculateDeviation(heights: number[]): {
+  overall: number
+  individual: number[]
+  exceedsThreshold: boolean
+  allExceed20: boolean
+} {
+  if (heights.length < 2) {
+    return { overall: 0, individual: [], exceedsThreshold: false, allExceed20: false }
+  }
   const avg = heights.reduce((a, b) => a + b, 0) / heights.length
-  if (avg === 0) return 0
-  const maxDev = Math.max(...heights.map((h) => Math.abs(h - avg)))
-  return Number(((maxDev / avg) * 100).toFixed(1))
+  const individual = heights.map((h) => (avg === 0 ? 0 : Number(Number(((h - avg) / avg) * 100).toFixed(1))))
+  const maxAbsDev = Math.max(...individual.map(Math.abs))
+  const overall = Number(maxAbsDev.toFixed(1))
+  const allExceed20 = heights.length >= 3 && individual.every((d) => Math.abs(d) > 20)
+  return {
+    overall,
+    individual,
+    exceedsThreshold: allExceed20,
+    allExceed20,
+  }
+}
+
+function ensureReportLayers(report: Report, isTaskCompleted: boolean): Report {
+  if (!isTaskCompleted) {
+    return report
+  }
+  if (!report.ashDistribution || report.ashDistribution.length === 0) {
+    report.ashDistribution = generateSpatialGrid(100, 100, 150, 2.5)
+  }
+  if (!report.thermalRadiationMap || report.thermalRadiationMap.length === 0) {
+    report.thermalRadiationMap = generateSpatialGrid(100, 400, 500, 1.8)
+  }
+  if (!report.settlementThickness || report.settlementThickness.length === 0) {
+    report.settlementThickness = generateSpatialGrid(100, 10, 30, 2.2)
+  }
+  return report
+}
+
+function loadReportsWithLayers(reports: Report[], tasks: SimulationTask[]): Report[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_REPORTS)
+    if (raw) {
+      const saved = JSON.parse(raw) as Record<string, Report>
+      return reports.map((r) => {
+        const task = tasks.find((t) => t.id === r.taskId)
+        const isCompleted = task?.status === 'completed'
+        const savedReport = saved[r.id]
+        if (savedReport && isCompleted) {
+          return {
+            ...r,
+            ashDistribution: savedReport.ashDistribution || r.ashDistribution,
+            thermalRadiationMap: savedReport.thermalRadiationMap || r.thermalRadiationMap,
+            settlementThickness: savedReport.settlementThickness || r.settlementThickness,
+          }
+        }
+        return ensureReportLayers(r, isCompleted)
+      })
+    }
+  } catch (_) {}
+  return reports.map((r) => {
+    const task = tasks.find((t) => t.id === r.taskId)
+    return ensureReportLayers(r, task?.status === 'completed')
+  })
+}
+
+function saveReportLayers(report: Report) {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_REPORTS)
+    const saved = raw ? JSON.parse(raw) : {}
+    saved[report.id] = {
+      ashDistribution: report.ashDistribution,
+      thermalRadiationMap: report.thermalRadiationMap,
+      settlementThickness: report.settlementThickness,
+    }
+    localStorage.setItem(STORAGE_KEY_REPORTS, JSON.stringify(saved))
+  } catch (_) {}
 }
 
 interface AppState {
@@ -157,6 +269,7 @@ interface AppState {
   loading: Record<string, boolean>
   errors: Record<string, string | null>
   activeVolcanoHeights: Record<string, number[]>
+  runningTaskIds: Set<string>
 
   fetchTasks: () => Promise<void>
   fetchAlerts: () => Promise<void>
@@ -191,23 +304,223 @@ interface AppState {
 
   startTaskProgression: (taskId: string) => void
   stopTaskProgression: (taskId: string) => void
-  isVolcanoPaused: (volcanoName: string) => boolean
+  isVolcanoPaused: (volcanoName: string) => DeviationAlert | null
+  calculateTaskDeviation: (taskId: string) => { overall: number; individual: number[]; exceedsThreshold: boolean; allExceed20: boolean }
   initActiveTasks: () => void
 }
 
 export const useAppStore = create<AppState>((set, get) => {
-  const initPushRecords = generateMockPushRecords()
+  const initPushRecords = loadPushRecords()
   const initActiveHeights: Record<string, number[]> = {}
   mockData.deviationAlerts.forEach((d) => {
     initActiveHeights[d.volcanoName] = [...d.plumeHeights]
   })
+  const initReports = loadReportsWithLayers(mockData.reports, mockData.tasks)
+
+  const runTaskTick = (taskId: string) => {
+    const state = get()
+    if (!state.runningTaskIds.has(taskId)) return
+
+    const task = state.tasks.find((t) => t.id === taskId)
+    if (!task) {
+      set({ runningTaskIds: new Set([...state.runningTaskIds].filter((id) => id !== taskId)) })
+      return
+    }
+    if (task.status === 'completed' || task.status === 'error_fallback') {
+      set({ runningTaskIds: new Set([...state.runningTaskIds].filter((id) => id !== taskId)) })
+      return
+    }
+
+    const hasError = Math.random() < 0.04 && task.status !== 'pending_verification'
+    if (hasError) {
+      set({
+        tasks: state.tasks.map((t) =>
+          t.id === taskId
+            ? {
+                ...t,
+                status: 'error_fallback' as TaskStatus,
+                progress: STATUS_PROGRESS[t.status],
+                updatedAt: new Date().toISOString(),
+              }
+            : t
+        ),
+        runningTaskIds: new Set([...state.runningTaskIds].filter((id) => id !== taskId)),
+      })
+      return
+    }
+
+    const nextStatus = getNextStatus(task.status)
+    if (!nextStatus) {
+      set({ runningTaskIds: new Set([...state.runningTaskIds].filter((id) => id !== taskId)) })
+      return
+    }
+
+    const stageMonitoring = generateMonitoringForTask(taskId, 3, 4000 + Math.random() * 2000)
+    const allMonitoring = [...state.monitoringData, ...stageMonitoring]
+    const latestPlumeHeight = stageMonitoring[stageMonitoring.length - 1]?.plumeHeight || 0
+    const latestAsh = stageMonitoring[stageMonitoring.length - 1]?.ashConcentration || 0
+
+    const STRATOSPHERE_THRESHOLD_M = 12000
+    const ASH_SAFETY_THRESHOLD = 300
+    const newAlerts: Alert[] = []
+    const curAlerts = state.alerts
+
+    if (latestPlumeHeight > STRATOSPHERE_THRESHOLD_M && nextStatus !== 'completed') {
+      const dup = curAlerts.find(
+        (a) => a.taskId === taskId && a.type === 'plume_height' && a.status === 'pending_review'
+      )
+      if (!dup) {
+        newAlerts.push({
+          id: generateId('alert'),
+          taskId,
+          type: 'plume_height',
+          level: latestPlumeHeight > STRATOSPHERE_THRESHOLD_M * 1.3 ? 'critical' : 'danger',
+          message: `喷发柱高度 ${(latestPlumeHeight / 1000).toFixed(1)} km 超过平流层阈值`,
+          threshold: STRATOSPHERE_THRESHOLD_M,
+          actualValue: latestPlumeHeight,
+          status: 'pending_review',
+          createdAt: new Date().toISOString(),
+        })
+      }
+    }
+    if (latestAsh > ASH_SAFETY_THRESHOLD && nextStatus !== 'completed') {
+      const dup = curAlerts.find(
+        (a) => a.taskId === taskId && a.type === 'ash_concentration' && a.status === 'pending_review'
+      )
+      if (!dup) {
+        newAlerts.push({
+          id: generateId('alert'),
+          taskId,
+          type: 'ash_concentration',
+          level: latestAsh > ASH_SAFETY_THRESHOLD * 1.5 ? 'critical' : 'warning',
+          message: `火山灰浓度 ${latestAsh.toFixed(0)} mg/m³ 威胁航空安全`,
+          threshold: ASH_SAFETY_THRESHOLD,
+          actualValue: latestAsh,
+          status: 'pending_review',
+          createdAt: new Date().toISOString(),
+        })
+      }
+    }
+
+    const updatedTask: SimulationTask = {
+      ...task,
+      status: nextStatus,
+      progress: STATUS_PROGRESS[nextStatus],
+      updatedAt: new Date().toISOString(),
+      currentStageStartTime: new Date().toISOString(),
+    }
+
+    const heightsKey = task.volcanoName
+    const curHeights = state.activeVolcanoHeights[heightsKey] || []
+    const newHeights = [...curHeights.slice(-2), latestPlumeHeight]
+    const newActiveHeights = { ...state.activeVolcanoHeights, [heightsKey]: newHeights }
+    const deviationResult = calculateDeviation(newHeights)
+
+    let finalReports = state.reports
+    let finalApprovals = state.approvals
+    let finalDeviations = state.deviationAlerts
+    const newRunningIds = [...state.runningTaskIds]
+
+    if (nextStatus === 'completed') {
+      const taskAllMons = allMonitoring.filter((m) => m.taskId === taskId)
+      const maxH = taskAllMons.reduce((m, x) => Math.max(m, x.plumeHeight), 0)
+      const riskLvl =
+        maxH > 15000 ? 'severe' : maxH > 12000 ? 'high' : maxH > 8000 ? 'medium' : 'low'
+      const reportId = generateId('report')
+      const newReport: Report = {
+        id: reportId,
+        taskId,
+        title: `${task.volcanoName}喷发模拟报告`,
+        summary: `基于${task.volcanoName}地质数据模拟完成。监测共${taskAllMons.length}个时间点，最大烟羽高度约${(maxH / 1000).toFixed(1)} km，航空风险等级：${riskLvl}。`,
+        plumeHeightChart: taskAllMons,
+        ashDistribution: generateSpatialGrid(100, 100, 150, 2.5),
+        thermalRadiationMap: generateSpatialGrid(100, 400, 500, 1.8),
+        settlementThickness: generateSpatialGrid(100, 10, 30, 2.2),
+        aviationRiskLevel: riskLvl,
+        generatedAt: new Date().toISOString(),
+        generatedBy: task.createdBy,
+      }
+      saveReportLayers(newReport)
+      finalReports = [...finalReports, newReport]
+
+      const volcApproval: Approval = {
+        id: generateId('approval'),
+        taskId,
+        reportId,
+        stage: 'volcanologist_validation',
+        status: 'pending',
+        approverId: '',
+        approverRole: 'volcanologist',
+        comments: '',
+        createdAt: new Date().toISOString(),
+      }
+      finalApprovals = [...finalApprovals, volcApproval]
+
+      if (deviationResult.exceedsThreshold) {
+        const existing = finalDeviations.find((d) => d.volcanoName === task.volcanoName)
+        if (existing) {
+          finalDeviations = finalDeviations.map((d) =>
+            d.volcanoName === task.volcanoName
+              ? {
+                  ...d,
+                  plumeHeights: newHeights,
+                  deviationPercentage: deviationResult.overall,
+                  isPaused: true,
+                  chiefNotified: true,
+                  notified: true,
+                }
+              : d
+          )
+        } else {
+          finalDeviations = [
+            ...finalDeviations,
+            {
+              id: generateId('deviation'),
+              volcanoName: task.volcanoName,
+              taskIds: [taskId],
+              plumeHeights: newHeights,
+              deviationPercentage: deviationResult.overall,
+              isPaused: true,
+              createdAt: new Date().toISOString(),
+              notified: true,
+              chiefNotified: true,
+            },
+          ]
+        }
+      }
+
+      const idx = newRunningIds.indexOf(taskId)
+      if (idx > -1) newRunningIds.splice(idx, 1)
+    }
+
+    set({
+      tasks: state.tasks.map((t) => (t.id === taskId ? updatedTask : t)),
+      monitoringData: allMonitoring,
+      alerts: [...newAlerts, ...curAlerts],
+      reports: finalReports,
+      approvals: finalApprovals,
+      deviationAlerts: finalDeviations,
+      activeVolcanoHeights: newActiveHeights,
+      runningTaskIds: new Set(newRunningIds),
+      dashboardStats: {
+        ...state.dashboardStats,
+        activeTasks: state.tasks.filter(
+          (t) => t.id !== taskId && t.status !== 'completed' && t.status !== 'error_fallback'
+        ).length + (nextStatus === 'completed' || nextStatus === 'error_fallback' ? 0 : 1),
+      },
+    })
+
+    if (nextStatus !== 'completed') {
+      setTimeout(() => runTaskTick(taskId), STAGE_DURATION_MS)
+    }
+  }
 
   return {
     currentUser: mockData.users.find((u) => u.role === 'volcanologist') || defaultUser,
     tasks: mockData.tasks,
     alerts: mockData.alerts,
     approvals: mockData.approvals,
-    reports: mockData.reports,
+    reports: initReports,
     dashboardStats: {
       totalTasks: mockData.tasks.length,
       completionRate:
@@ -228,6 +541,7 @@ export const useAppStore = create<AppState>((set, get) => {
     loading: {},
     errors: {},
     activeVolcanoHeights: initActiveHeights,
+    runningTaskIds: new Set<string>(),
 
     fetchTasks: async () => {
       set({ loading: { ...get().loading, fetchTasks: true } })
@@ -236,9 +550,8 @@ export const useAppStore = create<AppState>((set, get) => {
         if (response.success && response.data) {
           set({ tasks: response.data })
         }
-      } catch (_) {
-        // fallback to local state
-      } finally {
+      } catch (_) {}
+      finally {
         set({ loading: { ...get().loading, fetchTasks: false } })
       }
     },
@@ -250,9 +563,8 @@ export const useAppStore = create<AppState>((set, get) => {
         if (response.success && response.data) {
           set({ alerts: response.data })
         }
-      } catch (_) {
-        // fallback
-      } finally {
+      } catch (_) {}
+      finally {
         set({ loading: { ...get().loading, fetchAlerts: false } })
       }
     },
@@ -264,9 +576,8 @@ export const useAppStore = create<AppState>((set, get) => {
         if (response.success && response.data) {
           set({ approvals: response.data })
         }
-      } catch (_) {
-        // fallback
-      } finally {
+      } catch (_) {}
+      finally {
         set({ loading: { ...get().loading, fetchApprovals: false } })
       }
     },
@@ -276,11 +587,15 @@ export const useAppStore = create<AppState>((set, get) => {
       try {
         const response = await reportsApi.getReports()
         if (response.success && response.data) {
-          set({ reports: response.data })
+          const curTasks = get().tasks
+          const loaded = loadReportsWithLayers(response.data, curTasks)
+          set({ reports: loaded })
         }
       } catch (_) {
-        // fallback
-      } finally {
+        const curTasks = get().tasks
+        set({ reports: loadReportsWithLayers(get().reports, curTasks) })
+      }
+      finally {
         set({ loading: { ...get().loading, fetchReports: false } })
       }
     },
@@ -292,9 +607,8 @@ export const useAppStore = create<AppState>((set, get) => {
         if (response.success && response.data) {
           set({ dashboardStats: response.data })
         }
-      } catch (_) {
-        // fallback
-      } finally {
+      } catch (_) {}
+      finally {
         set({ loading: { ...get().loading, fetchDashboardStats: false } })
       }
     },
@@ -308,9 +622,8 @@ export const useAppStore = create<AppState>((set, get) => {
           const newData = response.data.filter((m) => !existingIds.has(m.id))
           set({ monitoringData: [...get().monitoringData, ...newData] })
         }
-      } catch (_) {
-        // fallback
-      } finally {
+      } catch (_) {}
+      finally {
         set({ loading: { ...get().loading, fetchMonitoringData: false } })
       }
     },
@@ -322,21 +635,33 @@ export const useAppStore = create<AppState>((set, get) => {
         if (response.success && response.data) {
           set({ deviationAlerts: response.data })
         }
-      } catch (_) {
-        // fallback
-      } finally {
+      } catch (_) {}
+      finally {
         set({ loading: { ...get().loading, fetchDeviationAlerts: false } })
       }
     },
 
     isVolcanoPaused: (volcanoName: string) => {
-      return get().deviationAlerts.some(
-        (d) =>
-          d.volcanoName === volcanoName &&
-          d.isPaused &&
-          d.deviationPercentage > 20 &&
-          d.plumeHeights.length >= 3
-      )
+      const heights = get().activeVolcanoHeights[volcanoName] || []
+      const dev = calculateDeviation(heights)
+      const alert = get().deviationAlerts.find((d) => d.volcanoName === volcanoName)
+      if (alert && alert.isPaused && dev.exceedsThreshold) {
+        return alert
+      }
+      if (dev.exceedsThreshold) {
+        return {
+          id: generateId('deviation'),
+          volcanoName,
+          taskIds: [],
+          plumeHeights: heights,
+          deviationPercentage: dev.overall,
+          isPaused: true,
+          createdAt: new Date().toISOString(),
+          notified: true,
+          chiefNotified: true,
+        }
+      }
+      return null
     },
 
     resumeVolcano: (volcanoName: string) => {
@@ -351,18 +676,30 @@ export const useAppStore = create<AppState>((set, get) => {
       })
     },
 
+    calculateTaskDeviation: (taskId: string) => {
+      const task = get().tasks.find((t) => t.id === taskId)
+      if (!task) return { overall: 0, individual: [], exceedsThreshold: false }
+      const heights = get().activeVolcanoHeights[task.volcanoName] || []
+      return calculateDeviation(heights)
+    },
+
     createTask: async (data) => {
-      set({ loading: { ...get().loading, createTask: true }, errors: { ...get().errors, createTask: null } })
+      set({
+        loading: { ...get().loading, createTask: true },
+        errors: { ...get().errors, createTask: null },
+      })
       try {
-        if (get().isVolcanoPaused(data.volcanoName)) {
+        const pausedAlert = get().isVolcanoPaused(data.volcanoName)
+        if (pausedAlert) {
           const err = `火山「${data.volcanoName}」因连续三次喷发柱高度偏差超过20%已被暂停新任务，已通知首席科学家复核。`
           set({ errors: { ...get().errors, createTask: err } })
           return null
         }
 
         const now = new Date().toISOString()
+        const newTaskId = generateId('task')
         const newTask: SimulationTask = {
-          id: generateId('task'),
+          id: newTaskId,
           name: data.name,
           volcanoName: data.volcanoName,
           magmaComposition: data.magmaComposition,
@@ -376,25 +713,43 @@ export const useAppStore = create<AppState>((set, get) => {
         }
         set({ tasks: [newTask, ...get().tasks] })
 
-        try {
-          const response = await tasksApi.createTask({
-            ...data,
-            createdBy: get().currentUser.id,
-          })
-          if (response.success && response.data) {
-            set({
-              tasks: get().tasks.map((t) =>
-                t.id === newTask.id ? response.data! : t
-              ),
-            })
-          }
-        } catch (_) {
-          // fallback to local
-        }
-
         setTimeout(() => {
-          get().startTaskProgression(newTask.id)
-        }, 200)
+          const cur = get()
+          const taskExists = cur.tasks.find((t) => t.id === newTaskId)
+          if (!taskExists) return
+
+          let finalId = newTaskId
+          tasksApi
+            .createTask({
+              ...data,
+              createdBy: cur.currentUser.id,
+            })
+            .then((response) => {
+              if (response.success && response.data && response.data.id) {
+                set((s) => ({
+                  tasks: s.tasks.map((t) => {
+                    if (t.id !== newTaskId) return t
+                    const currentTask = t
+                    const apiData = response.data!
+                    return {
+                      ...apiData,
+                      id: newTaskId,
+                      status: currentTask.status,
+                      progress: currentTask.progress,
+                      currentStageStartTime: currentTask.currentStageStartTime,
+                      updatedAt: currentTask.updatedAt,
+                    }
+                  }),
+                }))
+              }
+            })
+            .catch(() => {})
+
+          const newRunning = new Set(cur.runningTaskIds)
+          newRunning.add(finalId)
+          set({ runningTaskIds: newRunning })
+          runTaskTick(finalId)
+        }, 300)
 
         return newTask
       } catch (error) {
@@ -411,228 +766,28 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     startTaskProgression: (taskId: string) => {
-      // 清理旧timer防止重复
-      if (get().loading[`timer_${taskId}`]) return
-      set({ loading: { ...get().loading, [`timer_${taskId}`]: true } })
-
-      let tickCount = 0
-      const runTick = () => {
-        const state = get()
-        const task = state.tasks.find((t) => t.id === taskId)
-        if (!task) {
-          set({ loading: { ...get().loading, [`timer_${taskId}`]: false } })
-          return
-        }
-        if (task.status === 'completed' || task.status === 'error_fallback') {
-          set({ loading: { ...get().loading, [`timer_${taskId}`]: false } })
-          return
-        }
-
-        tickCount++
-
-        // 5% 概率异常回退
-        if (tickCount > 2 && Math.random() < 0.04 && task.status !== 'pending_verification') {
-          set({
-            tasks: get().tasks.map((t) =>
-              t.id === taskId
-                ? {
-                    ...t,
-                    status: 'error_fallback' as TaskStatus,
-                    progress: STATUS_PROGRESS[t.status],
-                    updatedAt: new Date().toISOString(),
-                  }
-                : t
-            ),
-            loading: { ...get().loading, [`timer_${taskId}`]: false },
-          })
-          return
-        }
-
-        const nextStatus = getNextStatus(task.status)
-        if (!nextStatus) {
-          set({ loading: { ...get().loading, [`timer_${taskId}`]: false } })
-          return
-        }
-
-        // 每个阶段生成监控数据
-        const stageMonitoring = generateMonitoringForTask(taskId, 3, 3000 + tickCount * 500)
-        const existingMons = get().monitoringData
-        const allMonitoring = [...existingMons, ...stageMonitoring]
-        const latestPlumeHeight = stageMonitoring[stageMonitoring.length - 1]?.plumeHeight || 0
-        const latestAsh = stageMonitoring[stageMonitoring.length - 1]?.ashConcentration || 0
-
-        // 预警生成
-        const STRATOSPHERE_THRESHOLD_M = 12000
-        const ASH_SAFETY_THRESHOLD = 300
-        const newAlerts: Alert[] = []
-        const curAlerts = get().alerts
-
-        if (latestPlumeHeight > STRATOSPHERE_THRESHOLD_M && nextStatus !== 'completed') {
-          const dup = curAlerts.find(
-            (a) => a.taskId === taskId && a.type === 'plume_height' && a.status === 'pending_review'
-          )
-          if (!dup) {
-            newAlerts.push({
-              id: generateId('alert'),
-              taskId,
-              type: 'plume_height',
-              level: latestPlumeHeight > STRATOSPHERE_THRESHOLD_M * 1.3 ? 'critical' : 'danger',
-              message: `喷发柱高度 ${(latestPlumeHeight / 1000).toFixed(1)} km 超过平流层阈值`,
-              threshold: STRATOSPHERE_THRESHOLD_M,
-              actualValue: latestPlumeHeight,
-              status: 'pending_review',
-              createdAt: new Date().toISOString(),
-            })
-          }
-        }
-        if (latestAsh > ASH_SAFETY_THRESHOLD && nextStatus !== 'completed') {
-          const dup = curAlerts.find(
-            (a) => a.taskId === taskId && a.type === 'ash_concentration' && a.status === 'pending_review'
-          )
-          if (!dup) {
-            newAlerts.push({
-              id: generateId('alert'),
-              taskId,
-              type: 'ash_concentration',
-              level: latestAsh > ASH_SAFETY_THRESHOLD * 1.5 ? 'critical' : 'warning',
-              message: `火山灰浓度 ${latestAsh.toFixed(0)} mg/m³ 威胁航空安全`,
-              threshold: ASH_SAFETY_THRESHOLD,
-              actualValue: latestAsh,
-              status: 'pending_review',
-              createdAt: new Date().toISOString(),
-            })
-          }
-        }
-
-        // 更新任务
-        const updatedTask: SimulationTask = {
-          ...task,
-          status: nextStatus,
-          progress: STATUS_PROGRESS[nextStatus],
-          updatedAt: new Date().toISOString(),
-          currentStageStartTime: new Date().toISOString(),
-        }
-
-        // 火山高度记录用于偏差计算
-        const heightsKey = task.volcanoName
-        const curHeights = get().activeVolcanoHeights[heightsKey] || []
-        const newHeights = [...curHeights.slice(-2), latestPlumeHeight]
-        const newActiveHeights = { ...get().activeVolcanoHeights, [heightsKey]: newHeights }
-
-        let finalReports = get().reports
-        let finalApprovals = get().approvals
-        let finalDeviations = get().deviationAlerts
-
-        if (nextStatus === 'completed') {
-          // 生成报告，填充所有数据图层
-          const taskAllMons = allMonitoring.filter((m) => m.taskId === taskId)
-          const reportId = generateId('report')
-          const maxH = taskAllMons.reduce((m, x) => Math.max(m, x.plumeHeight), 0)
-          const riskLvl =
-            maxH > 15000 ? 'severe' : maxH > 12000 ? 'high' : maxH > 8000 ? 'medium' : 'low'
-
-          const newReport: Report = {
-            id: reportId,
-            taskId,
-            title: `${task.volcanoName}喷发模拟报告`,
-            summary: `基于${task.volcanoName}地质数据模拟完成。监测共${taskAllMons.length}个时间点，最大烟羽高度约${(maxH / 1000).toFixed(1)} km，航空风险等级：${riskLvl}。`,
-            plumeHeightChart: taskAllMons,
-            ashDistribution: generateSpatialGrid(100, 100, 150, 2.5),
-            thermalRadiationMap: generateSpatialGrid(100, 400, 500, 1.8),
-            settlementThickness: generateSpatialGrid(100, 10, 30, 2.2),
-            aviationRiskLevel: riskLvl,
-            generatedAt: new Date().toISOString(),
-            generatedBy: task.createdBy,
-          }
-          finalReports = [...finalReports, newReport]
-
-          const volcApproval: Approval = {
-            id: generateId('approval'),
-            taskId,
-            reportId,
-            stage: 'volcanologist_validation',
-            status: 'pending',
-            approverId: '',
-            approverRole: 'volcanologist',
-            comments: '',
-            createdAt: new Date().toISOString(),
-          }
-          finalApprovals = [...finalApprovals, volcApproval]
-
-          // 偏差检测
-          if (newHeights.length >= 3) {
-            const dev = calculateDeviation(newHeights)
-            if (dev > 20) {
-              const existing = finalDeviations.find((d) => d.volcanoName === task.volcanoName)
-              if (existing) {
-                finalDeviations = finalDeviations.map((d) =>
-                  d.volcanoName === task.volcanoName
-                    ? {
-                        ...d,
-                        plumeHeights: newHeights,
-                        deviationPercentage: dev,
-                        isPaused: true,
-                        chiefNotified: true,
-                        notified: true,
-                      }
-                    : d
-                )
-              } else {
-                finalDeviations = [
-                  ...finalDeviations,
-                  {
-                    id: generateId('deviation'),
-                    volcanoName: task.volcanoName,
-                    taskIds: [taskId],
-                    plumeHeights: newHeights,
-                    deviationPercentage: dev,
-                    isPaused: true,
-                    createdAt: new Date().toISOString(),
-                    notified: true,
-                    chiefNotified: true,
-                  },
-                ]
-              }
-            }
-          }
-
-          set({ loading: { ...get().loading, [`timer_${taskId}`]: false } })
-        }
-
-        set({
-          tasks: get().tasks.map((t) => (t.id === taskId ? updatedTask : t)),
-          monitoringData: allMonitoring,
-          alerts: [...newAlerts, ...curAlerts],
-          reports: finalReports,
-          approvals: finalApprovals,
-          deviationAlerts: finalDeviations,
-          activeVolcanoHeights: newActiveHeights,
-          dashboardStats: {
-            ...get().dashboardStats,
-            activeTasks: get().tasks.filter(
-              (t) => t.id !== taskId && t.status !== 'completed' && t.status !== 'error_fallback'
-            ).length + (nextStatus === 'completed' || nextStatus === 'error_fallback' ? 0 : 1),
-          },
-        })
-
-        if (nextStatus !== 'completed') {
-          setTimeout(runTick, STAGE_DURATION_MS)
-        }
-      }
-
-      setTimeout(runTick, STAGE_DURATION_MS)
+      const cur = get()
+      if (cur.runningTaskIds.has(taskId)) return
+      const newRunning = new Set(cur.runningTaskIds)
+      newRunning.add(taskId)
+      set({ runningTaskIds: newRunning })
+      runTaskTick(taskId)
     },
 
     stopTaskProgression: (taskId: string) => {
-      set({ loading: { ...get().loading, [`timer_${taskId}`]: false } })
+      const newRunning = new Set([...get().runningTaskIds].filter((id) => id !== taskId))
+      set({ runningTaskIds: newRunning })
     },
 
     initActiveTasks: () => {
-      // 无操作，兼容
+      // no-op, for compat
     },
 
     reviewAlert: async (id, data) => {
-      set({ loading: { ...get().loading, reviewAlert: true }, errors: { ...get().errors, reviewAlert: null } })
+      set({
+        loading: { ...get().loading, reviewAlert: true },
+        errors: { ...get().errors, reviewAlert: null },
+      })
       try {
         const { alerts, tasks, currentUser, adjustmentLogs } = get()
         const alert = alerts.find((a) => a.id === id)
@@ -688,7 +843,7 @@ export const useAppStore = create<AppState>((set, get) => {
 
             setTimeout(() => {
               get().startTaskProgression(task.id)
-            }, 300)
+            }, 400)
           }
         }
 
@@ -700,9 +855,7 @@ export const useAppStore = create<AppState>((set, get) => {
 
         try {
           await alertsApi.reviewAlert(id, { ...data, reviewedBy: currentUser.id })
-        } catch (_) {
-          // fallback
-        }
+        } catch (_) {}
         return updatedAlert
       } catch (error) {
         set({
@@ -718,7 +871,10 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     decideApproval: async (id, data) => {
-      set({ loading: { ...get().loading, decideApproval: true }, errors: { ...get().errors, decideApproval: null } })
+      set({
+        loading: { ...get().loading, decideApproval: true },
+        errors: { ...get().errors, decideApproval: null },
+      })
       try {
         const { approvals, currentUser, reports, tasks, pushRecords } = get()
         const approval = approvals.find((a) => a.id === id)
@@ -773,40 +929,42 @@ export const useAppStore = create<AppState>((set, get) => {
         }
 
         if (data.status === 'approved' && approval.stage === 'mitigation_confirmation') {
-          const task = tasks.find((t) => t.id === approval.taskId)
-          const report = reports.find((r) => r.id === approval.reportId)
-          const taskName = task?.name || approval.taskId
-          const risk = report?.aviationRiskLevel || 'medium'
-          finalPushRecords = [
-            ...finalPushRecords,
-            {
-              id: generateId('push'),
-              approvalId: id,
-              taskId: approval.taskId,
-              targetDepartment: 'aviation',
-              message: `【民航预警通知】模拟任务「${taskName}」完成审批，航空风险等级：${risk}。请及时调整航线并通知相关机组人员。`,
-              pushedAt: new Date().toISOString(),
-              status: 'sent',
-            },
-            {
-              id: generateId('push'),
-              approvalId: id,
-              taskId: approval.taskId,
-              targetDepartment: 'emergency',
-              message: `【应急响应通知】模拟任务「${taskName}」完成审批，航空风险等级：${risk}。请评估并启动对应级别应急预案。`,
-              pushedAt: new Date().toISOString(),
-              status: 'sent',
-            },
-          ]
+          const existingPush = pushRecords.filter((p) => p.approvalId === id)
+          if (existingPush.length === 0) {
+            const task = tasks.find((t) => t.id === approval.taskId)
+            const report = reports.find((r) => r.id === approval.reportId)
+            const taskName = task?.name || approval.taskId
+            const risk = report?.aviationRiskLevel || 'medium'
+            finalPushRecords = [
+              ...finalPushRecords,
+              {
+                id: generateId('push'),
+                approvalId: id,
+                taskId: approval.taskId,
+                targetDepartment: 'aviation',
+                message: `【民航预警通知】模拟任务「${taskName}」完成审批，航空风险等级：${risk}。请及时调整航线并通知相关机组人员。`,
+                pushedAt: new Date().toISOString(),
+                status: 'sent',
+              },
+              {
+                id: generateId('push'),
+                approvalId: id,
+                taskId: approval.taskId,
+                targetDepartment: 'emergency',
+                message: `【应急响应通知】模拟任务「${taskName}」完成审批，航空风险等级：${risk}。请评估并启动对应级别应急预案。`,
+                pushedAt: new Date().toISOString(),
+                status: 'sent',
+              },
+            ]
+            savePushRecords(finalPushRecords)
+          }
         }
 
         set({ approvals: finalApprovals, pushRecords: finalPushRecords })
 
         try {
           await approvalsApi.decideApproval(id, data)
-        } catch (_) {
-          // fallback
-        }
+        } catch (_) {}
         return updatedApproval
       } catch (error) {
         set({
@@ -839,9 +997,7 @@ export const useAppStore = create<AppState>((set, get) => {
         })
         try {
           await tasksApi.updateTaskStatus(id, status)
-        } catch (_) {
-          // fallback
-        }
+        } catch (_) {}
         return get().tasks.find((t) => t.id === id) || null
       } catch (error) {
         set({

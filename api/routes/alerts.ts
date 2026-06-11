@@ -66,6 +66,7 @@ const mockDeviations: DeviationAlert[] = [
     isPaused: true,
     createdAt: '2024-06-10T11:30:00Z',
     notified: true,
+    chiefNotified: false,
   },
   {
     id: 'deviation-2',
@@ -76,6 +77,7 @@ const mockDeviations: DeviationAlert[] = [
     isPaused: false,
     createdAt: '2024-06-01T10:40:00Z',
     notified: false,
+    chiefNotified: false,
   },
 ]
 

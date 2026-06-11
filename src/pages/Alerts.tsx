@@ -18,7 +18,7 @@ import { cn } from '@/lib/utils';
 import type { DeviationAlert } from '../../shared/types';
 
 export default function Alerts() {
-  const { deviationAlerts, fetchDeviationAlerts, currentUser, fetchTasks, tasks, updateTaskStatus } = useAppStore();
+  const { deviationAlerts, fetchDeviationAlerts, currentUser, fetchTasks, tasks, updateTaskStatus, resumeVolcano } = useAppStore();
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -40,7 +40,15 @@ export default function Alerts() {
 
   const isPausedStatus = (alert: DeviationAlert) => alert.isPaused && alert.deviationPercentage > 20;
 
+  const calculateIndividualDeviations = (heights: number[]) => {
+    if (heights.length < 2) return { individual: [] as number[], avg: 0 };
+    const avg = heights.reduce((a, b) => a + b, 0) / heights.length;
+    const individual = heights.map((h) => (avg === 0 ? 0 : Number(Number(((h - avg) / avg) * 100).toFixed(1))));
+    return { individual, avg };
+  };
+
   const handleResume = async (alert: DeviationAlert) => {
+    resumeVolcano(alert.volcanoName);
     for (const taskId of alert.taskIds) {
       const task = tasks.find((t) => t.id === taskId);
       if (task && task.status !== 'completed') {
@@ -241,39 +249,56 @@ export default function Alerts() {
                     连续喷发柱高度检测
                   </h4>
                   <div className="space-y-3">
-                    {selected.plumeHeights.map((height, idx) => (
-                      <div key={idx} className="flex items-center gap-3">
-                        <div
-                          className={cn(
-                            'w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold border-2',
-                            idx === selected.plumeHeights.length - 1
-                              ? 'bg-danger-500/20 border-danger-500 text-danger-400'
-                              : 'bg-deep-space-700/50 border-deep-space-600 text-deep-space-300'
-                          )}
-                        >
-                          #{idx + 1}
-                        </div>
-                        <div className="flex-1">
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="text-sm text-deep-space-300">第 {idx + 1} 次检测</span>
-                            <span className="font-data font-medium text-deep-space-100">
-                              {(height / 1000).toFixed(1)} km
-                            </span>
+                    {(() => {
+                      const { individual } = calculateIndividualDeviations(selected.plumeHeights);
+                      return selected.plumeHeights.map((height, idx) => {
+                        const dev = individual[idx] || 0;
+                        const exceeds = Math.abs(dev) > 20;
+                        return (
+                        <div key={idx} className="flex items-center gap-3">
+                          <div
+                            className={cn(
+                              'w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold border-2',
+                              idx === selected.plumeHeights.length - 1
+                                ? 'bg-danger-500/20 border-danger-500 text-danger-400'
+                                : 'bg-deep-space-700/50 border-deep-space-600 text-deep-space-300'
+                            )}
+                          >
+                            #{idx + 1}
                           </div>
-                          <div className="h-2 bg-deep-space-700/50 rounded-full overflow-hidden">
-                            <div
-                              className={cn(
-                                'h-full rounded-full',
-                                idx === selected.plumeHeights.length - 1
-                                  ? 'bg-gradient-to-r from-danger-500 to-danger-400'
-                                  : 'bg-gradient-to-r from-data-500 to-data-400'
-                              )}
-                              style={{ width: `${Math.min(100, (height / 20000) * 100)}%` }}
-                            />
+                          <div className="flex-1">
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="text-sm text-deep-space-300">第 {idx + 1} 次检测</span>
+                              <div className="flex items-center gap-2">
+                                <span className="font-data font-medium text-deep-space-100">
+                                  {(height / 1000).toFixed(1)} km
+                                </span>
+                                {individual.length > 0 && (
+                                  <span className={cn(
+                                    'text-xs font-data px-1.5 py-0.5 rounded',
+                                    exceeds ? 'bg-danger-500/20 text-danger-400' : 'bg-deep-space-700/50 text-deep-space-400'
+                                  )}>
+                                    {dev > 0 ? '+' : ''}{dev}%
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            <div className="h-2 bg-deep-space-700/50 rounded-full overflow-hidden">
+                              <div
+                                className={cn(
+                                  'h-full rounded-full',
+                                  idx === selected.plumeHeights.length - 1
+                                    ? 'bg-gradient-to-r from-danger-500 to-danger-400'
+                                    : 'bg-gradient-to-r from-data-500 to-data-400'
+                                )}
+                                style={{ width: `${Math.min(100, (height / 20000) * 100)}%` }}
+                              />
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                      });
+                    })()}
                   </div>
                 </div>
 
@@ -284,15 +309,58 @@ export default function Alerts() {
                   </h4>
                   <div className="space-y-3">
                     <div className="flex items-center justify-between p-3 rounded-lg bg-danger-500/5 border border-danger-500/20">
-                      <span className="text-sm text-deep-space-300">偏差百分比</span>
+                      <span className="text-sm text-deep-space-300">最大偏差</span>
                       <span className="text-2xl font-bold text-danger-400 font-data">
                         +{selected.deviationPercentage.toFixed(1)}%
                       </span>
                     </div>
-                    <p className="text-sm text-deep-space-400 leading-relaxed">
-                      连续三次检测显示喷发柱高度呈上升趋势，与预测值偏差超过阈值。
-                      系统已自动触发偏差告警机制，相关任务{isPausedStatus(selected) ? '已暂停' : '正在监控中'}。偏差超过20%时将自动暂停相关任务。
-                    </p>
+
+                    <div className="p-3 rounded-lg bg-deep-space-900/50 border border-deep-space-700/30">
+                      <h5 className="text-sm font-medium text-deep-space-200 mb-3">各次偏差判断</h5>
+                      <div className="space-y-2">
+                        {(() => {
+                          const { individual } = calculateIndividualDeviations(selected.plumeHeights);
+                          return individual.map((dev, idx) => {
+                            const exceeds = Math.abs(dev) > 20;
+                            return (
+                              <div key={idx} className="flex items-center justify-between">
+                                <span className="text-sm text-deep-space-400">第 {idx + 1} 次</span>
+                                <div className="flex items-center gap-2">
+                                  <span className={cn(
+                                    'text-xs font-data px-2 py-0.5 rounded',
+                                    exceeds ? 'bg-danger-500/20 text-danger-400' : 'bg-data-500/10 text-data-400'
+                                  )}>
+                                    {dev > 0 ? '+' : ''}{dev}%
+                                  </span>
+                                  <span className={cn(
+                                    'text-xs',
+                                    exceeds ? 'text-danger-400' : 'text-deep-space-500'
+                                  )}>
+                                    {exceeds ? '超阈值' : '正常'}
+                                  </span>
+                                </div>
+                              </div>
+                            );
+                          });
+                        })()}
+                      </div>
+                    </div>
+
+                    <div className="p-3 rounded-lg bg-warning-500/5 border border-warning-500/20">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-sm text-deep-space-300">判断规则</span>
+                        <span className={cn(
+                          'text-xs px-2 py-0.5 rounded font-medium',
+                          isPausedStatus(selected) ? 'bg-danger-500/20 text-danger-400' : 'bg-warning-500/20 text-warning-400'
+                        )}>
+                          {isPausedStatus(selected) ? '已触发暂停' : '监控中'}
+                        </span>
+                      </div>
+                      <p className="text-xs text-deep-space-400">
+                        连续三次检测，最大偏差 {'>'} 20% 时自动暂停该火山新任务。
+                        当前 {selected.plumeHeights.length} 次检测，最大偏差 +{selected.deviationPercentage.toFixed(1)}%。
+                      </p>
+                    </div>
                   </div>
                 </div>
 
