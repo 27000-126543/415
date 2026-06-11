@@ -311,6 +311,7 @@ interface AppState {
 
 export const useAppStore = create<AppState>((set, get) => {
   const initPushRecords = loadPushRecords()
+  const initApprovals = loadApprovals(mockData.approvals)
   const initActiveHeights: Record<string, number[]> = {}
   mockData.deviationAlerts.forEach((d) => {
     initActiveHeights[d.volcanoName] = [...d.plumeHeights]
