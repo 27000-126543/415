@@ -357,34 +357,127 @@ export default function TaskDetail() {
               <AlertCircle className="w-5 h-5 text-warning-400" />
               调整日志
             </h3>
-            <div className="space-y-3">
+            <div className="space-y-4">
               {taskAdjustmentLogs.length > 0 ? (
                 taskAdjustmentLogs.map((log, idx) => (
                   <div
                     key={log.id}
                     className={cn(
-                      'p-4 rounded-lg bg-deep-space-900/50 border',
-                      idx === 0 ? 'border-data-500/30' : 'border-deep-space-700/30'
+                      'p-5 rounded-xl bg-deep-space-900/50 border transition-all',
+                      idx === 0
+                        ? 'border-lava-500/40 border-l-4 shadow-glow-orange/30'
+                        : 'border-deep-space-700/30'
                     )}
                   >
-                    <div className="flex items-center gap-2 mb-2 flex-wrap">
-                      <span className="text-xs font-data text-deep-space-400">{formatDate(log.createdAt)}</span>
-                      <span className="text-xs px-2 py-0.5 rounded bg-deep-space-700/50 text-deep-space-200">
-                        {getRoleLabel(log.adjustedBy as any)}
-                      </span>
+                    <div className="flex items-center justify-between items-start mb-3 flex-wrap gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs font-data text-deep-space-400">
+                          {formatDate(log.createdAt)}
+                        </span>
+                        <span className="text-xs px-2 py-0.5 rounded bg-lava-500/20 text-lava-400 border border-lava-500/30">
+                          {getRoleLabel(log.adjustedBy as any)}
+                        </span>
+                      </div>
+                      {idx === 0 && (
+                        <span className="text-[10px] px-2 py-0.5 rounded bg-data-500/20 text-data-400 font-medium">
+                          最新调整
+                        </span>
+                      )}
                     </div>
-                    <p className="text-sm text-deep-space-100">
-                      {log.adjustments.ventDiameter != null && `喷口直径: ${log.adjustments.ventDiameter}m`}
-                      {log.adjustments.ventDiameter != null && log.adjustments.h2oContent != null && '，'}
-                      {log.adjustments.h2oContent != null && `H₂O含量: ${log.adjustments.h2oContent}wt%`}
-                    </p>
-                    <p className="text-xs text-deep-space-400 mt-1">{log.reason}</p>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 my-3">
+                      <div className="p-3 rounded-lg bg-danger-500/5 border border-danger-500/20">
+                        <div className="text-[11px] uppercase tracking-wider text-danger-400 mb-2 font-medium">
+                          ⬅ 调整前
+                        </div>
+                        <div className="space-y-1.5 text-sm">
+                          <div className="flex justify-between">
+                            <span className="text-deep-space-400">喷口直径</span>
+                            <span className="font-data text-deep-space-200">
+                              {log.beforeParams.ventDiameter} m
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-deep-space-400">H₂O 含量</span>
+                            <span className="font-data text-deep-space-200">
+                              {log.beforeParams.h2oContent} wt%
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-deep-space-400">初始压力</span>
+                            <span className="font-data text-deep-space-200">
+                              {log.beforeParams.initialPressure} MPa
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-deep-space-400">初始温度</span>
+                            <span className="font-data text-deep-space-200">
+                              {log.beforeParams.initialTemperature} ℃
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="p-3 rounded-lg bg-data-500/5 border border-data-500/20">
+                        <div className="text-[11px] uppercase tracking-wider text-data-400 mb-2 font-medium">
+                          调整后 ➡
+                        </div>
+                        <div className="space-y-1.5 text-sm">
+                          <div className="flex justify-between">
+                            <span className="text-deep-space-400">喷口直径</span>
+                            <span className="font-data text-lava-400">
+                              {log.afterParams.ventDiameter} m
+                              {log.beforeParams.ventDiameter !== log.afterParams.ventDiameter && (
+                                <span className="ml-1 text-[10px text-danger-400">
+                                  ({((log.afterParams.ventDiameter - log.beforeParams.ventDiameter) / log.beforeParams.ventDiameter * 100).toFixed(0)}%
+                                </span>
+                              )}
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-deep-space-400">H₂O 含量</span>
+                            <span className="font-data text-lava-400">
+                              {log.afterParams.h2oContent} wt%
+                              {log.beforeParams.h2oContent !== log.afterParams.h2oContent && (
+                                <span className="ml-1 text-[10px] text-danger-400">
+                                  ({((log.afterParams.h2oContent - log.beforeParams.h2oContent) / log.beforeParams.h2oContent * 100).toFixed(0)}%
+                                </span>
+                              )}
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-deep-space-400">初始压力</span>
+                            <span className="font-data text-deep-space-200">
+                              {log.afterParams.initialPressure} MPa
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-deep-space-400">初始温度</span>
+                            <span className="font-data text-deep-space-200">
+                              {log.afterParams.initialTemperature} ℃
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 pt-3 border-t border-deep-space-700/30">
+                      <div className="text-xs text-deep-space-400 mb-1">调整理由</div>
+                      <p className="text-sm text-deep-space-100 leading-relaxed">
+                        {log.reason}
+                      </p>
+                    </div>
                   </div>
                 ))
               ) : (
-                <div className="py-8 text-center text-deep-space-500 text-sm">
-                  暂无调整记录
+                <div className="py-12 text-center text-deep-space-500 text-sm">
+                <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-deep-space-800/50 flex items-center justify-center">
+                  <AlertCircle className="w-6 h-6 text-deep-space-600" />
                 </div>
+                <p className="text-deep-space-400">暂无调整记录</p>
+                <p className="mt-1 text-xs text-deep-space-500">
+                  当预警复核选择调整参数后，将在此显示详细调整记录
+                </p>
+              </div>
               )}
             </div>
           </div>
